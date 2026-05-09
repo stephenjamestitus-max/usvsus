@@ -767,17 +767,22 @@ function setHeroImg(src){const img=document.getElementById('heroImg');img.src=sr
 async function changeHeroPhoto(input){
   const file=input.files[0];if(!file)return;
   showToast('⏳ Uploading...');
-  const reader=new FileReader();
-  reader.onload=async e=>{
-    setHeroImg(e.target.result);
-    try {
-      await sb.from('settings').upsert({key:'hero_photo',value:e.target.result});
-      showToast('📷 Cover updated for both of you!');
-    } catch(err){
-      showToast('❌ Photo upload failed');
-    }
-  };
-  reader.readAsDataURL(file);
+  try {
+    // Show local preview immediately
+    const {dataUrl} = await compressImage(file);
+    setHeroImg(dataUrl);
+    // Upload to Storage, save public URL in settings
+    const blob = dataUrlToBlob(dataUrl);
+    const filename = `hero_${Date.now()}.jpg`;
+    const {error:upErr} = await sb.storage.from('memories').upload(filename, blob, {contentType:'image/jpeg', upsert:false});
+    if(upErr) throw upErr;
+    const {data:{publicUrl}} = sb.storage.from('memories').getPublicUrl(filename);
+    await sb.from('settings').upsert({key:'hero_photo', value:publicUrl});
+    showToast('📷 Cover updated!');
+  } catch(err){
+    console.error(err);
+    showToast('❌ Photo upload failed');
+  }
 }
 
 // CALM SIGNAL — FIX: guard against sending to yourself
