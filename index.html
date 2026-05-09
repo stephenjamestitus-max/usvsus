@@ -740,7 +740,7 @@ async function saveMemory(){
       const {publicUrl} = await uploadPhotoToStorage(memPhotoFile);
       img_data = publicUrl;
     }
-    const row={emoji:memMode==='photo'?'📷':chosenE,img_data,caption:cap,description:cap,date_label:date,rot:rots[Math.floor(Math.random()*rots.length)]};
+    const row={emoji:memMode==='photo'?'📷':chosenE,img_data,caption:cap,date_label:date,rot:rots[Math.floor(Math.random()*rots.length)]};
     const {error}=await sb.from('memories').insert(row);
     if(error) throw error;
     document.getElementById('capIn').value='';
