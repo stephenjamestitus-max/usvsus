@@ -662,12 +662,40 @@ function switchMemMode(mode){
   document.getElementById('tabPhoto').classList.toggle('active',mode==='photo');
 }
 function pickE(btn,e){document.querySelectorAll('.ebtn').forEach(b=>b.classList.remove('sel'));btn.classList.add('sel');chosenE=e;}
-function previewMemPhoto(input){
-  const file=input.files[0];if(!file)return;
-  const reader=new FileReader();
-  reader.onload=e=>{memPhotoData=e.target.result;const p=document.getElementById('memPhotoPreview');p.src=memPhotoData;p.style.display='block';};
-  reader.readAsDataURL(file);
+
+// Compress image to max 600px wide, 0.7 quality JPEG — keeps it well under Supabase row limit
+function compressImage(file, maxPx=600, quality=0.72){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onerror=reject;
+    reader.onload=ev=>{
+      const img=new Image();
+      img.onerror=reject;
+      img.onload=()=>{
+        const scale=Math.min(1, maxPx/Math.max(img.width,img.height));
+        const w=Math.round(img.width*scale);
+        const h=Math.round(img.height*scale);
+        const canvas=document.createElement('canvas');
+        canvas.width=w; canvas.height=h;
+        canvas.getContext('2d').drawImage(img,0,0,w,h);
+        resolve(canvas.toDataURL('image/jpeg',quality));
+      };
+      img.src=ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
 }
+
+async function previewMemPhoto(input){
+  const file=input.files[0]; if(!file)return;
+  showToast('⏳ Preparing photo...');
+  try {
+    memPhotoData = await compressImage(file);
+    const p=document.getElementById('memPhotoPreview');
+    p.src=memPhotoData; p.style.display='block';
+  } catch(e){ showToast('❌ Could not load photo'); }
+}
+
 function openModal(){
   memPhotoData=null;
   document.getElementById('memPhotoPreview').style.display='none';
@@ -682,6 +710,7 @@ async function saveMemory(){
   const rots=['-2deg','-1.5deg','-1deg','0.5deg','1deg','1.5deg','2deg','2.5deg'];
   const row={emoji:memMode==='photo'?'📷':chosenE,img_data:memMode==='photo'?memPhotoData:null,caption:cap,date_label:date,rot:rots[Math.floor(Math.random()*rots.length)]};
   try {
+    showToast('⏳ Saving...');
     const {error}=await sb.from('memories').insert(row);
     if(error) throw error;
     document.getElementById('capIn').value='';
@@ -691,7 +720,8 @@ async function saveMemory(){
     showToast('✨ Memory saved for both of you!');
     loadMemories();
   } catch(e){
-    showToast('❌ Save failed — try again');
+    console.error('Save memory error:',e);
+    showToast('❌ Save failed — photo may be too large');
   }
 }
 
