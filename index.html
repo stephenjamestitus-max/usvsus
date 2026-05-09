@@ -663,8 +663,8 @@ function switchMemMode(mode){
 }
 function pickE(btn,e){document.querySelectorAll('.ebtn').forEach(b=>b.classList.remove('sel'));btn.classList.add('sel');chosenE=e;}
 
-// Compress image — retries smaller until under 900KB base64 (~675KB raw)
-function compressImage(file, maxPx=1200, quality=0.82){
+// Compress image for preview only (reasonable screen size)
+function compressImage(file, maxPx=1400, quality=0.85){
   return new Promise((resolve,reject)=>{
     const reader=new FileReader();
     reader.onerror=reject;
@@ -672,18 +672,12 @@ function compressImage(file, maxPx=1200, quality=0.82){
       const img=new Image();
       img.onerror=reject;
       img.onload=()=>{
-        const tryCompress=(px,q)=>{
-          const scale=Math.min(1, px/Math.max(img.width,img.height));
-          const w=Math.round(img.width*scale);
-          const h=Math.round(img.height*scale);
-          const canvas=document.createElement('canvas');
-          canvas.width=w; canvas.height=h;
-          canvas.getContext('2d').drawImage(img,0,0,w,h);
-          const data=canvas.toDataURL('image/jpeg',q);
-          if(data.length < 900*1024 || q <= 0.3) return resolve(data);
-          tryCompress(Math.round(px*0.75), Math.max(q-0.15, 0.3));
-        };
-        tryCompress(maxPx, quality);
+        const scale=Math.min(1, maxPx/Math.max(img.width,img.height));
+        const canvas=document.createElement('canvas');
+        canvas.width=Math.round(img.width*scale);
+        canvas.height=Math.round(img.height*scale);
+        canvas.getContext('2d').drawImage(img,0,0,canvas.width,canvas.height);
+        resolve({canvas, dataUrl: canvas.toDataURL('image/jpeg',quality)});
       };
       img.src=ev.target.result;
     };
@@ -691,18 +685,43 @@ function compressImage(file, maxPx=1200, quality=0.82){
   });
 }
 
+// Convert dataUrl to Blob for storage upload
+function dataUrlToBlob(dataUrl){
+  const [header,data]=dataUrl.split(',');
+  const mime=header.match(/:(.*?);/)[1];
+  const bytes=atob(data);
+  const arr=new Uint8Array(bytes.length);
+  for(let i=0;i<bytes.length;i++) arr[i]=bytes.charCodeAt(i);
+  return new Blob([arr],{type:mime});
+}
+
+// Upload to Supabase Storage bucket 'memories' and return public URL
+async function uploadPhotoToStorage(file){
+  const {canvas, dataUrl} = await compressImage(file);
+  const blob = dataUrlToBlob(dataUrl);
+  const filename = `mem_${Date.now()}_${Math.random().toString(36).slice(2)}.jpg`;
+  const {data, error} = await sb.storage.from('memories').upload(filename, blob, {contentType:'image/jpeg', upsert:false});
+  if(error) throw error;
+  const {data:{publicUrl}} = sb.storage.from('memories').getPublicUrl(filename);
+  return {publicUrl, dataUrl}; // dataUrl used for local preview
+}
+
+let memPhotoFile = null; // store raw file for upload
+
 async function previewMemPhoto(input){
   const file=input.files[0]; if(!file)return;
+  memPhotoFile = file;
   showToast('⏳ Preparing photo...');
   try {
-    memPhotoData = await compressImage(file);
+    const {dataUrl} = await compressImage(file);
+    memPhotoData = dataUrl; // preview only
     const p=document.getElementById('memPhotoPreview');
-    p.src=memPhotoData; p.style.display='block';
+    p.src=dataUrl; p.style.display='block';
   } catch(e){ showToast('❌ Could not load photo'); }
 }
 
 function openModal(){
-  memPhotoData=null;
+  memPhotoData=null; memPhotoFile=null;
   document.getElementById('memPhotoPreview').style.display='none';
   document.getElementById('memPhotoPreview').src='';
   switchMemMode('emoji');
@@ -710,23 +729,29 @@ function openModal(){
 }
 function closeModal(){document.getElementById('modal').classList.remove('open');}
 async function saveMemory(){
-  const cap=document.getElementById('capIn').value||'A beautiful moment';
+  const cap=document.getElementById('capIn').value||'A moment';
   const date=document.getElementById('dateIn').value||'Recently';
   const rots=['-2deg','-1.5deg','-1deg','0.5deg','1deg','1.5deg','2deg','2.5deg'];
-  const row={emoji:memMode==='photo'?'📷':chosenE,img_data:memMode==='photo'?memPhotoData:null,caption:cap,description:cap,date_label:date,rot:rots[Math.floor(Math.random()*rots.length)]};
   try {
     showToast('⏳ Saving...');
+    let img_data = null;
+    if(memMode==='photo' && memPhotoFile){
+      // Upload file to Storage — no row size limit
+      const {publicUrl} = await uploadPhotoToStorage(memPhotoFile);
+      img_data = publicUrl;
+    }
+    const row={emoji:memMode==='photo'?'📷':chosenE,img_data,caption:cap,description:cap,date_label:date,rot:rots[Math.floor(Math.random()*rots.length)]};
     const {error}=await sb.from('memories').insert(row);
     if(error) throw error;
     document.getElementById('capIn').value='';
     document.getElementById('dateIn').value='';
-    memPhotoData=null;
+    memPhotoData=null; memPhotoFile=null;
     closeModal();
-    showToast('✨ Memory saved for both of you!');
+    showToast('✨ Memory saved!');
     loadMemories();
   } catch(e){
     console.error('Save memory error:',e);
-    showToast('❌ Save failed — photo may be too large');
+    showToast('❌ Save failed — ' + (e.message||'try again'));
   }
 }
 
